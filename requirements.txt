@@ -11,3 +11,4 @@ kaggle
 huggingface_hub
 streamlit
 pytorch
+matplotlib

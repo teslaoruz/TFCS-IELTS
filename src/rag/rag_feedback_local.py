@@ -25,13 +25,13 @@ FAISS_INDEX_PATH = ROOT_DIR / "data" / "embeddings" / "faiss.index"
 METADATA_PATH = ROOT_DIR / "data" / "embeddings" / "metadata.pkl"
 PROCESSED_CSV_PATH = ROOT_DIR / "data" / "processed" / "ielts_clean.csv"
 
-EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-QWEN_MODEL_PATH = "Mohaaxa/qwen2.5-1.5b-gptq-4bit-v2"
+EMBED_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+QWEN_MODEL_PATH = "Qwen/Qwen2.5-1.5B-Instruct"
 MAX_REFERENCE_ESSAYS = 3
 MAX_WORDS_PER_REFERENCE = 170
 ENABLE_LLM_GENERATION = True
 STRICT_SECTION_FORMAT = True
-SHOW_RAW_OUTPUT_ON_FALLBACK = False
+SHOW_RAW_OUTPUT_ON_FALLBACK = True
 RAW_OUTPUT_PREVIEW_CHARS = 700
 
 
@@ -63,51 +63,124 @@ def sanitize_query(raw_query: str) -> str:
     return query
 
 
+def normalize_for_dedup(text: str) -> str:
+    lowered = str(text).lower()
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
+
+
 def is_degenerate_output(text: str) -> bool:
     cleaned = str(text).strip()
-    if len(cleaned) < 40:
+
+    if not cleaned:
         return True
+
+    if len(cleaned) < 10:
+        return True
+
     if re.search(r"([!?.])\1{20,}", cleaned):
         return True
-    if cleaned.count("!") > max(30, int(0.2 * len(cleaned))):
+
+    if cleaned.count("�") > 5:
         return True
-    unique_ratio = len(set(cleaned)) / max(1, len(cleaned))
-    if unique_ratio < 0.08:
-        return True
-    ascii_ratio = sum(1 for ch in cleaned if 32 <= ord(ch) <= 126) / max(1, len(cleaned))
-    if len(cleaned) >= 120 and ascii_ratio < 0.78:
-        return True
-    latin_letter_ratio = sum(1 for ch in cleaned if ch.isalpha() and ord(ch) < 128) / max(1, len(cleaned))
-    if len(cleaned) >= 120 and latin_letter_ratio < 0.35:
-        return True
+
     return False
 
+def is_valid_response(text: str) -> bool:
+    if not has_expected_feedback_sections(text):
+        return False
+
+    if "Mistakes and Corrections:" not in text:
+        return False
+
+    # check paragraph length (rough)
+    if "One Improved Sample Paragraph:" in text:
+        part = text.split("One Improved Sample Paragraph:")[-1]
+        words = len(part.split())
+        if words < 60:   # strict threshold
+            return False
+
+    return True
 
 def has_expected_feedback_sections(text: str) -> bool:
-    normalized = str(text).lower()
-    required = [
-        "estimated band",
-        "strengths",
-        "weaknesses",
-        "top 3 improvements",
-        "one improved sample paragraph",
+    t = str(text).lower()
+
+    checks = [
+        re.search(r"band|score", t),
+        re.search(r"strength", t),
+        re.search(r"weakness", t),
+        re.search(r"improvement|suggestion", t),
+        re.search(r"paragraph", t),
     ]
-    return all(section in normalized for section in required)
+
+    return sum(bool(c) for c in checks) >= 3
+
+
+def select_prompt_references(retrieved: list[dict], limit: int) -> list[dict]:
+    chosen: list[dict] = []
+    seen: set[str] = set()
+    for item in retrieved:
+        signature = normalize_for_dedup(item.get("essay", ""))[:600]
+        if signature in seen:
+            continue
+        seen.add(signature)
+        chosen.append(item)
+        if len(chosen) >= limit:
+            break
+    return chosen
 
 
 def build_structured_fallback(query: str, retrieved: list[dict], score_label: str) -> str:
     weighted_scores = []
+
+    # 🔥 STEP 1: collect valid scores
+    scores = []
+    for item in retrieved:
+        try:
+            scores.append(float(item["score"]))
+        except (TypeError, ValueError):
+            continue
+
+    mean_score = sum(scores) / len(scores) if scores else 0
+
+    # 🔥 STEP 2: weighted scoring with filtering
     for item in retrieved:
         try:
             score = float(item["score"])
         except (TypeError, ValueError):
             continue
-        similarity = 1.0 / (1.0 + float(item["distance"]))
-        weighted_scores.append((score, similarity))
 
+        distance = float(item["distance"])
+
+        # 🚀 FILTER BAD NEIGHBORS
+        if distance > 1.2:
+            continue
+
+        similarity = 1.0 / (1.0 + distance)
+
+        # 🚀 SCORE-AWARE PENALTY
+        score_penalty = 1 / (1 + 0.5 * abs(score - mean_score))
+
+        final_weight = similarity * score_penalty
+
+        weighted_scores.append((score, final_weight))
+
+    # 🚀 FALLBACK IF TOO FEW NEIGHBORS
+    if len(weighted_scores) < 3:
+        weighted_scores = []
+        for item in retrieved:
+            try:
+                score = float(item["score"])
+            except:
+                continue
+
+            similarity = 1.0 / (1.0 + float(item["distance"]))
+            weighted_scores.append((score, similarity))
+
+    # 🔥 STEP 3: final prediction
     if weighted_scores:
-        numerator = sum(score * sim for score, sim in weighted_scores)
-        denominator = sum(sim for _, sim in weighted_scores) or 1.0
+        numerator = sum(score * w for score, w in weighted_scores)
+        denominator = sum(w for _, w in weighted_scores) or 1.0
         predicted = round((numerator / denominator) * 2) / 2
     else:
         predicted = "N/A"
@@ -148,23 +221,72 @@ def resolve_score_column(df: pd.DataFrame) -> str | None:
 
     return None
 
+def clean_markdown(text: str) -> str:
+    text = text.replace("**", "")
+    text = text.replace("*", "")
+    return text
+
+
+def clean_corrections(text: str) -> str:
+    lines = text.split("\n")
+    cleaned = []
+
+    for line in lines:
+        if "→" in line:
+            parts = line.split("→")
+            if len(parts) == 2:
+                left = parts[0].strip().strip('- ').strip('"')
+                right = parts[1].strip().strip('"')
+
+                if left == right:
+                    continue
+
+        cleaned.append(line)
+
+    return "\n".join(cleaned)
+
+def trim_after_section(text: str) -> str:
+    if "Mistakes and Corrections:" in text:
+        parts = text.split("Mistakes and Corrections:")
+        before = parts[0]
+        after = parts[1]
+
+        lines = after.split("\n")
+        cleaned = []
+
+        for line in lines:
+            if "→" in line:
+                cleaned.append(line)
+            elif line.strip() == "":
+                continue
+            else:
+                break
+
+        return before + "Mistakes and Corrections:\n" + "\n".join(cleaned)
+
+    return text
 
 def load_optional_generator():
     try:
-        from transformers import AutoTokenizer
-        from auto_gptq import AutoGPTQForCausalLM
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+
     except ModuleNotFoundError:
         return None
 
     print("Loading Qwen2.5-1.5B 4-bit model... (may take a minute)")
     try:
         tokenizer = AutoTokenizer.from_pretrained(QWEN_MODEL_PATH, trust_remote_code=True)
-        model = AutoGPTQForCausalLM.from_quantized(
+        
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
             QWEN_MODEL_PATH,
             device_map="auto",
-            use_safetensors=True,
-            trust_remote_code=True,
+            torch_dtype=torch.float16,
         )
+        
+        model.eval()
 
         def generate_text(prompt: str, max_new_tokens: int = 320) -> str:
             if hasattr(tokenizer, "apply_chat_template"):
@@ -185,20 +307,43 @@ def load_optional_generator():
                 rendered_prompt = prompt
 
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            inputs = tokenizer(rendered_prompt, return_tensors="pt").to(device)
+            max_model_len = getattr(tokenizer, "model_max_length", 4096)
+            if not isinstance(max_model_len, int) or max_model_len <= 0 or max_model_len > 32768:
+                max_model_len = 4096
+            max_model_len = min(max_model_len, 4096)
+
+            inputs = tokenizer(
+                rendered_prompt,
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_model_len,
+            ).to(device)
+
+            eos_token_id = tokenizer.eos_token_id
+            pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_token_id
+
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    min_new_tokens=200,
                     do_sample=False,
-                    repetition_penalty=1.22,
-                    no_repeat_ngram_size=4,
-                    pad_token_id=tokenizer.eos_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
+                    repetition_penalty=1.1,
+                    pad_token_id=pad_token_id,
+                    eos_token_id=eos_token_id,
                 )
 
-            generated_ids = output_ids[0][inputs["input_ids"].shape[1] :]
-            return tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            generated_ids = output_ids[0][inputs["input_ids"].shape[1]:]
+            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+            # 🔥 CUT OFF weird chat artifacts
+            response = response.split("<tool_call>")[0]
+            response = response.split("Human:")[0]
+            response = response.split("Assistant:")[0]
+
+            response = response.strip()
+
+            return response
 
         return generate_text
     except Exception as exc:
@@ -239,7 +384,7 @@ def retrieve_essays(
     distances, indices = index.search(query_emb, top_k)
     retrieved = []
     for rank, (distance, idx) in enumerate(zip(distances[0], indices[0]), start=1):
-        if int(idx) < 0:
+        if int(idx) > 0.8:
             continue
         row_idx = map_to_row_index(int(idx), metadata)
         if row_idx < 0 or row_idx >= len(essays_df):
@@ -313,13 +458,17 @@ def main():
 
     print("Loading embedding model...")
     embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+
     generator = None
     if ENABLE_LLM_GENERATION:
         generator = load_optional_generator()
         if generator is None:
             print("Note: local GPTQ generation is unavailable. Using structured fallback mode.")
-    else:
-        print("Local GPTQ generation is disabled. Using stable structured feedback mode.")
+    
+    if generator:
+        print("\n=== SANITY TEST ===")
+        print(generator("Hello, how are you?"))
+        print("====================\n")
 
     print("IELTS RAG Feedback System")
     while True:
@@ -340,7 +489,7 @@ def main():
 
         retrieved = retrieve_essays(
             query=query,
-            top_k=5,
+            top_k=10,
             embed_model=embed_model,
             index=index,
             metadata=metadata,
@@ -352,7 +501,7 @@ def main():
             continue
 
         print_retrieved_essays(retrieved, score_label=score_label)
-        prompt_references = retrieved[:MAX_REFERENCE_ESSAYS]
+        prompt_references = select_prompt_references(retrieved, MAX_REFERENCE_ESSAYS)
         retrieved_text = "\n\n".join(
             [
                 (
@@ -370,40 +519,108 @@ def main():
             continue
 
         prompt = f"""
-Evaluate the student's IELTS writing using the reference essays.
-Write in plain English only.
-Do not output random symbols or non-English tokens.
+You are a strict IELTS Writing examiner.
 
-Return exactly these sections:
+Give realistic band scoring (do NOT be overly positive).
+Be strict. Penalize grammar mistakes heavily.
+
+Output MUST be plain text only. No bold, no markdown, no symbols.
+
+You MUST include at least 3 items in "Mistakes and Corrections".
+If there are fewer, create more based on grammar errors in the text.
+
+Do NOT wrap the paragraph in quotation marks.
+
+Each strength and weakness MUST quote a specific phrase from the student's writing.
+
+You MUST follow the format EXACTLY.
+
+- Do NOT use markdown (no **, no bold, no symbols).
+- Do NOT add any extra sections.
+- Do NOT rename any headings.
+- Output must be plain text only.
+- If you fail to follow format, the answer is incorrect.
+- If you add anything outside the required format, your answer is WRONG.
+
 Estimated Band:
-Strengths:
-Weaknesses:
-Top 3 Improvements:
+(only a number from 4.0 to 9.0)
+
+Strengths (based ONLY on student's writing):
+- ...
+
+Weaknesses (based ONLY on student's writing):
+- ...
+
+Top 3 Improvements (based ONLY on student's writing):
+1. ...
+2. ...
+3. ...
+
 One Improved Sample Paragraph:
+(Write a FULL paragraph of 80-120 words. Do not cut off mid-sentence.)
+
+Mistakes and Corrections:
+- "wrong word" → "correct word"
+
+Only include REAL mistakes from the student's text.
+
+- The original word MUST be incorrect.
+- The corrected word MUST be different.
+- NEVER include identical pairs like "word" → "word".
+- Each correction must fix a clear spelling or grammar error.
+
+If the phrase is already correct, DO NOT include it.
+Each correction must clearly fix an error.
+
+This is IELTS Academic Task 1.
+
+- Do NOT suggest personal opinions, stories, or anecdotes.
+- Focus only on data description, comparisons, and trends.
 
 Student submission:
 {query}
 
-Reference essays:
+Reference essays (DO NOT copy from these. Use only for general quality comparison):
+
 {retrieved_text}
+
+IMPORTANT:
+- Only evaluate the STUDENT submission.
+- Do NOT quote or correct reference essays.
+- All mistakes MUST come from the student text only.
+- If a sentence is not in the student submission, DO NOT use it.
 """
-        response = generator(prompt, max_new_tokens=220)
-        low_quality = is_degenerate_output(response)
-        missing_sections = not has_expected_feedback_sections(response)
-        if low_quality or (STRICT_SECTION_FORMAT and missing_sections):
-            if SHOW_RAW_OUTPUT_ON_FALLBACK and response:
-                preview = response[:RAW_OUTPUT_PREVIEW_CHARS]
-                if len(response) > RAW_OUTPUT_PREVIEW_CHARS:
-                    preview += " ..."
+        
+        response = generator(prompt, max_new_tokens=600)
+        
+        response = clean_markdown(response)
+        response = clean_corrections(response)
+        response = trim_after_section(response)
+
+        low_quality = is_degenerate_output(response) or not is_valid_response(response)
+
+        if low_quality:
+            if SHOW_RAW_OUTPUT_ON_FALLBACK:
                 print("\nRaw LLM output preview (debug):")
-                print(preview)
+                if response:
+                    preview = response[:RAW_OUTPUT_PREVIEW_CHARS]
+                    if len(response) > RAW_OUTPUT_PREVIEW_CHARS:
+                        preview += " ..."
+                    print(preview)
+                else:
+                    print("[empty output from model]")
+
             print("Warning: model output was low-quality; using structured fallback.")
-            response = build_structured_fallback(query=query, retrieved=retrieved, score_label=score_label)
-        elif missing_sections:
-            print("Note: LLM output format differs from template; showing raw model output.")
+            response = build_structured_fallback(
+                query=query,
+                retrieved=retrieved,
+                score_label=score_label
+            )
+
         print("\nRAG Feedback:\n")
         print(response if response else "[No output generated]")
 
 
 if __name__ == "__main__":
     main()
+

@@ -1,3 +1,6 @@
+import os
+print("🔥 RUNNING FILE:", os.path.abspath(__file__))
+
 import pickle
 import warnings
 from dataclasses import dataclass
@@ -9,6 +12,46 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
+print("🔥 FILE LOADED: lightweight_inference.py")
+
+def predict_band_with_llm(generator, query: str, neighbors) -> float:
+    examples = ""
+
+    for n in neighbors[:3]:
+        examples += f"Band: {n.band}\nEssay:\n{n.essay[:200]}\n\n"
+
+    prompt = f"""
+You are a strict IELTS Writing examiner.
+
+Evaluate the essay using these criteria:
+- Task Response
+- Coherence and Cohesion
+- Lexical Resource
+- Grammar Accuracy
+
+Use the examples as reference.
+
+Examples:
+{examples}
+
+Student Essay:
+{query}
+
+Think carefully about the quality of writing.
+
+Return ONLY the band score (e.g., 6.5).
+"""
+
+    response = generator(prompt, max_new_tokens=50)
+
+    import re
+    match = re.search(r"\d+(\.\d+)?", response)
+
+    if match:
+        score = float(match.group())
+        return max(4.0, min(9.0, round(score * 2) / 2))
+
+    return None
 
 DEFAULT_DATA_PATH = Path("data/processed/ielts_clean.csv")
 DEFAULT_INDEX_PATH = Path("data/embeddings/faiss.index")
@@ -84,6 +127,12 @@ class LightweightRAGEvaluator:
                 "Failed to load embedding model. If running in an offline environment, "
                 "download the model once online or set local_files_only=False in a networked setup."
             ) from exc
+
+        # 🔥 ADD THESE TWO LINES HERE
+        from .rag_feedback_local import load_optional_generator
+        self.generator = load_optional_generator()
+        print("🔥 INIT CALLED")
+        print("Generator:", self.generator)
 
     @staticmethod
     def _load_metadata(meta_path: Path) -> Any:
@@ -245,12 +294,41 @@ class LightweightRAGEvaluator:
             "reference_neighbor_band": top_neighbor.band,
         }
 
-    def evaluate(self, essay_text: str, top_k: int = 5) -> dict[str, Any]:
+    def evaluate(self, essay_text: str, top_k: int = 5):
         neighbors = self.retrieve_neighbors(essay_text=essay_text, top_k=top_k)
-        predicted_band = self.predict_band(neighbors)
+
+
+        # 🔥 fallback (old method)
+        fallback_predicted = self.predict_band(neighbors)
+
+        # 🔥 try LLM
+        llm_predicted = None
+
+        if self.generator is not None:
+            llm_predicted = predict_band_with_llm(
+                self.generator,
+                essay_text,
+                neighbors
+            )
+
+        # ✅ DEBUG (correct variables)
+        print("LLM prediction:", llm_predicted)
+        print("Fallback:", fallback_predicted)
+        print("🔥 EVALUATE CALLED")
+        print("🔥 USING LLM")
+        
+        # 🔥 fallback if LLM fails
+        if llm_predicted is not None:
+            predicted_band = round((llm_predicted + fallback_predicted) / 2 * 2) / 2
+        else:
+            predicted_band = fallback_predicted
+
         feedback = self.generate_feedback(predicted_band=predicted_band, neighbors=neighbors)
+
         return {
             "predicted_band": predicted_band,
             "neighbors": neighbors,
             "feedback": feedback,
         }
+
+    
