@@ -18,7 +18,7 @@ def predict_band_with_llm(generator, query: str, neighbors) -> float:
     examples = ""
 
     for n in neighbors[:3]:
-        examples += f"Band: {n.band}\nEssay:\n{n.essay[:200]}\n\n"
+        examples += f"Band: {n.band}\nEssay:\n{n.essay[:80]}\n\n"
 
     prompt = f"""
 You are a strict IELTS Writing examiner.
@@ -42,10 +42,11 @@ Think carefully about the quality of writing.
 Return ONLY the band score (e.g., 6.5).
 """
 
-    response = generator(prompt, max_new_tokens=50)
+    response = generator(prompt,10)
+    print("LLM RAW:", response)
 
     import re
-    match = re.search(r"\d+(\.\d+)?", response)
+    match = re.search(r"\b[4-9](?:\.\d)?\b", response)
 
     if match:
         score = float(match.group())
@@ -318,10 +319,30 @@ class LightweightRAGEvaluator:
         print("🔥 USING LLM")
         
         # 🔥 fallback if LLM fails
-        if llm_predicted is not None:
-            predicted_band = round((llm_predicted + fallback_predicted) / 2 * 2) / 2
+        rag_score = fallback_predicted
+        llm_score = llm_predicted
+
+        # ✅ DEFAULT (always safe)
+        final_score = rag_score
+
+        if llm_score is None:
+            final_score = rag_score
+
         else:
-            predicted_band = fallback_predicted
+            diff = abs(llm_score - rag_score)
+
+            if diff > 1.0:
+                final_score = rag_score   # very bad LLM → ignore
+
+            elif diff > 0.75:
+                final_score = 0.9 * rag_score + 0.1 * llm_score
+
+            else:
+                final_score = 0.7 * rag_score + 0.3 * llm_score
+
+        predicted_band = round(final_score * 2) / 2
+
+        print("FINAL:", predicted_band)
 
         feedback = self.generate_feedback(predicted_band=predicted_band, neighbors=neighbors)
 

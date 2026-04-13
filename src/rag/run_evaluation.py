@@ -1,22 +1,13 @@
 import pandas as pd
+from src.rag.lightweight_inference import LightweightRAGEvaluator
+from src.utils.evaluation_metrics import compute_mae, compute_rmse
+
 import matplotlib
-matplotlib.use('Agg')   # safer
+matplotlib.use('Agg')  # safe for terminal
 import matplotlib.pyplot as plt
 
-import importlib
-import src.rag.lightweight_inference as lwi
-
-print("🔥 THIS IS THE FILE BEING EXECUTED")
-
-importlib.reload(lwi)
-
-LightweightRAGEvaluator = lwi.LightweightRAGEvaluator
-from src.utils.evaluation_metrics import compute_mae, compute_rmse
-import sys
-sys.stdout.flush()
-
 def main():
-    print("🔥 RUN_EVAL FILE LOADED", flush=True)
+    print("🔥 RUN_EVAL FILE LOADED")
 
     df = pd.read_csv("data/processed/ielts_clean.csv")
     evaluator = LightweightRAGEvaluator()
@@ -26,20 +17,16 @@ def main():
 
     print("Running evaluation...")
 
-    for i, row in df.sample(20, random_state=42).iterrows():
-        essay = row["essay"]
-        true_score = float(row["overall"])
-
-        result = evaluator.evaluate(essay_text=essay, top_k=5)
+    for _, row in df.sample(20, random_state=42).iterrows():
+        result = evaluator.evaluate(row["essay"], top_k=5)
         predicted = result["predicted_band"]
 
         if predicted is None:
             continue
 
-        y_true.append(true_score)
+        y_true.append(float(row["overall"]))
         y_pred.append(predicted)
 
-    # ✅ metrics
     mae = compute_mae(y_true, y_pred)
     rmse = compute_rmse(y_true, y_pred)
 
@@ -47,6 +34,7 @@ def main():
     print(f"Samples used: {len(y_true)}")
     print(f"MAE: {mae:.3f}")
     print(f"RMSE: {rmse:.3f}")
+
 
     # ======================
     # 📈 PLOTS (MOVE INSIDE)
@@ -79,6 +67,8 @@ def main():
     plt.bar(["MAE", "RMSE"], [mae, rmse])
     plt.title("Evaluation Metrics")
     plt.savefig("metrics_bar.png")
+
+    plt.close()
 
     print("\nPlots saved successfully.")
 

@@ -284,11 +284,27 @@ def load_optional_generator():
             QWEN_MODEL_PATH,
             device_map="auto",
             torch_dtype=torch.float16,
+            trust_remote_code=True   # 🔥 ADD THIS
         )
         
         model.eval()
 
-        def generate_text(prompt: str, max_new_tokens: int = 320) -> str:
+        # 🔥 FORCE RESET ENTIRE GENERATION CONFIG
+        from transformers import GenerationConfig
+
+        model.generation_config = GenerationConfig(
+            max_new_tokens=20,
+            min_new_tokens=0,
+            min_length=0,
+            do_sample=False,
+        )
+
+        # 🔥 FIX: override bad default generation config
+        model.generation_config.min_new_tokens = 0
+        model.generation_config.min_length = 0
+        model.generation_config.max_new_tokens = 20
+
+        def generate_text(prompt: str, max_new_tokens: int = 20) -> str:
             if hasattr(tokenizer, "apply_chat_template"):
                 messages = [
                     {
@@ -319,16 +335,26 @@ def load_optional_generator():
                 max_length=max_model_len,
             ).to(device)
 
+            # 🔥 HARD LIMIT INPUT LENGTH (THIS FIXES YOUR WARNINGS)
+            # 🔥 HARD LIMIT INPUT SIZE (THIS IS THE REAL FIX)
+            if inputs["input_ids"].shape[1] > 300:
+                inputs["input_ids"] = inputs["input_ids"][:, -300:]
+                inputs["attention_mask"] = inputs["attention_mask"][:, -300:]
+
             eos_token_id = tokenizer.eos_token_id
             pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_token_id
 
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
+
+                    # 🔥 FORCE EVERYTHING HERE (THIS IS THE REAL FINAL FIX)
                     max_new_tokens=max_new_tokens,
-                    min_new_tokens=200,
+                    min_new_tokens=0,
+                    min_length=0,
+                    max_length=inputs["input_ids"].shape[1] + 20,
+
                     do_sample=False,
-                    repetition_penalty=1.1,
                     pad_token_id=pad_token_id,
                     eos_token_id=eos_token_id,
                 )
@@ -384,7 +410,7 @@ def retrieve_essays(
     distances, indices = index.search(query_emb, top_k)
     retrieved = []
     for rank, (distance, idx) in enumerate(zip(distances[0], indices[0]), start=1):
-        if int(idx) > 0.8:
+        if distance > 0.8:
             continue
         row_idx = map_to_row_index(int(idx), metadata)
         if row_idx < 0 or row_idx >= len(essays_df):
@@ -591,7 +617,7 @@ IMPORTANT:
 - If a sentence is not in the student submission, DO NOT use it.
 """
         
-        response = generator(prompt, max_new_tokens=600)
+        response = generator(prompt)
         
         response = clean_markdown(response)
         response = clean_corrections(response)
