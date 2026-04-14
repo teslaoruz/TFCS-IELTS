@@ -6,6 +6,9 @@ import matplotlib
 matplotlib.use('Agg')  # safe for terminal
 import matplotlib.pyplot as plt
 
+import os
+print("RUNNING:", os.path.abspath(__file__))
+
 def main():
     print("🔥 RUN_EVAL FILE LOADED")
 
@@ -17,15 +20,25 @@ def main():
 
     print("Running evaluation...")
 
-    for _, row in df.sample(20, random_state=42).iterrows():
+    total_samples = 0   # 👈 ADD HERE
+
+    print("DEBUG SAMPLE SIZE:", len(df.sample(100, random_state=42)))
+
+    for _, row in df.sample(100, random_state=42).iterrows():
+        total_samples += 1   # 👈 ADD HERE
+
         result = evaluator.evaluate(row["essay"], top_k=5)
         predicted = result["predicted_band"]
 
         if predicted is None:
-            continue
+            neighbors = evaluator.retrieve_neighbors(row["essay"], top_k=5)
+            predicted = evaluator.predict_band(neighbors)
 
         y_true.append(float(row["overall"]))
         y_pred.append(predicted)
+
+    print(f"Total sampled: {total_samples}")        # 👈 ADD HERE
+    print(f"Valid predictions: {len(y_true)}")      # 👈 ADD HERE
 
     mae = compute_mae(y_true, y_pred)
     rmse = compute_rmse(y_true, y_pred)
@@ -37,41 +50,52 @@ def main():
 
 
     # ======================
-    # 📈 PLOTS (MOVE INSIDE)
+    # 📈 FIG 3 — SCATTER
     # ======================
 
     plt.figure()
-    plt.scatter(y_true, y_pred)
+    plt.scatter(y_true, y_pred, label="Predictions", alpha=0.7)
+
+    # diagonal reference line
+    min_val = min(min(y_true), min(y_pred))
+    max_val = max(max(y_true), max(y_pred))
+    plt.plot([min_val, max_val], [min_val, max_val], '--', label="Ideal")
+    plt.legend()
+
+    plt.grid()
+    plt.tight_layout()
+
     plt.xlabel("True Band Score")
     plt.ylabel("Predicted Band Score")
-    plt.title("Predicted vs True Band Scores")
-    plt.savefig("scatter_plot.png")
+    plt.title("Predicted vs True IELTS Band Scores (Proposed Method)")
+
+    plt.savefig("fig3_scatter.png")
+    plt.close()
+
+
+    # ======================
+    # 📈 FIG 4 — ERROR HISTOGRAM
+    # ======================
 
     errors = [abs(t - p) for t, p in zip(y_true, y_pred)]
 
     plt.figure()
-    plt.hist(errors, bins=10)
+    plt.hist(errors, bins=10, alpha=0.8)
+    
+    plt.grid()
+    plt.tight_layout()
+
     plt.xlabel("Absolute Error")
     plt.ylabel("Frequency")
     plt.title("Error Distribution")
-    plt.savefig("error_distribution.png")
 
-    plt.figure()
-    plt.plot(y_true, label="True")
-    plt.plot(y_pred, label="Predicted")
-    plt.legend()
-    plt.title("True vs Predicted Scores")
-    plt.savefig("line_plot.png")
-
-    plt.figure()
-    plt.bar(["MAE", "RMSE"], [mae, rmse])
-    plt.title("Evaluation Metrics")
-    plt.savefig("metrics_bar.png")
-
+    plt.savefig("fig4_error_hist.png")
     plt.close()
 
     print("\nPlots saved successfully.")
 
 
+
 if __name__ == "__main__":
     main()
+    

@@ -331,12 +331,12 @@ class LightweightRAGEvaluator:
         else:
             diff = abs(llm_score - rag_score)
 
-            if diff > 1.0:
-                final_score = rag_score   # very bad LLM → ignore
+            tau = 1.0  # 🔥 CHANGE THIS VALUE FOR ABLATION
+            print("CURRENT TAU:", tau)
+            print("DIFF:", diff)
 
-            elif diff > 0.75:
-                final_score = 0.9 * rag_score + 0.1 * llm_score
-
+            if diff > tau:
+                final_score = rag_score
             else:
                 final_score = 0.7 * rag_score + 0.3 * llm_score
 

@@ -347,13 +347,7 @@ def load_optional_generator():
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
-
-                    # 🔥 FORCE EVERYTHING HERE (THIS IS THE REAL FINAL FIX)
-                    max_new_tokens=max_new_tokens,
-                    min_new_tokens=0,
-                    min_length=0,
-                    max_length=inputs["input_ids"].shape[1] + 20,
-
+                    max_new_tokens=10,
                     do_sample=False,
                     pad_token_id=pad_token_id,
                     eos_token_id=eos_token_id,
