@@ -1,0 +1,114 @@
+# Central benchmark configuration for TFCS-IELTS
+# All paths are relative to project root unless absolute.
+
+# --- Dataset ---
+dataset:
+  # Local processed CSV path (fallback if HF dataset unavailable)
+  local_csv: "data/processed/ielts_clean.csv"
+  # Prefer loading the configured Hugging Face dataset over the local CSV
+  prefer_hf: true
+  # HuggingFace dataset identifier (set to null to disable)
+  hf_dataset: "chillies/IELTS-writing-task-2-evaluation"
+  # If HF download fails, expected local file path for manual import
+  hf_local_fallback: "data/huggingface_chillies"
+  # Score column name resolution priority
+  score_columns: ["overall", "band", "score"]
+  # Minimum essay length in words (after cleaning)
+  min_words: 80
+  # Maximum essay length in words
+  max_words: 500
+  # Remove exact duplicates
+  deduplicate: true
+  # Remove near-duplicates (cosine > threshold); set to null to skip
+  near_duplicate_threshold: null
+
+# --- Splits ---
+splits:
+  seed: 42
+  # Ratios for train/val/test
+  train_ratio: 0.70
+  val_ratio: 0.15
+  # test_ratio is inferred as 1 - train - val
+  # Saved split files directory
+  split_dir: "data/splits"
+  # Column to stratify by (null = no stratification)
+  stratify_column: null
+
+# --- Embedding / Retrieval ---
+retrieval:
+  # Primary embedding model for retrieval
+  embed_model: "sentence-transformers/all-MiniLM-L6-v2"
+  # Device for retrieval/query embedding
+  device: "auto"
+  # Secondary model (for cross-encoder or reranking; null = skip)
+  cross_encoder_model: null
+  # FAISS index type: "FlatL2" or "FlatIP"
+  index_type: "FlatIP"
+  # Number of neighbors to retrieve
+  top_k: 7
+  # Exclude self-match when query is in index
+  exclude_self: true
+  # Max distance threshold for neighbor validity (null = no filter)
+  max_distance: null
+  # Whether to use prompt + essay for retrieval (concatenated)
+  prompt_aware: true
+  # Diverse exemplar mode for LLM path
+  diverse_exemplars: true
+  # Embedding dimension (auto-detected, set here for offline config)
+  embed_dim: 384
+
+# --- LLM Scoring ---
+llm:
+  # Model path (HF identifier or local GGUF file)
+  model_name: "data/models/qwen2.5-3b-instruct-q4_k_m.gguf"
+  # Prompt template file
+  prompt_template: "configs/prompts/scoring_prompt.txt"
+  # Generation parameters
+  max_new_tokens: 80
+  do_sample: false
+  temperature: null
+  # Truncate input to max tokens
+  max_input_tokens: 2048
+  # Number of retries on malformed output
+  max_retries: 2
+  # Whether LLM scoring is enabled
+  enabled: true
+
+# --- Fusion ---
+fusion:
+  # Strategy: "retrieval_only", "llm_only", "threshold_gating", "learned_fusion"
+  strategy: "threshold_gating"
+  # Threshold for gating: if |llm - retrieval| > tau, use retrieval alone
+  tau: 1.5
+  # Fusion weight for weighted average (when within tau):
+  #   final = alpha * retrieval + (1 - alpha) * llm
+  alpha: 0.7
+  # Path to learned fusion model (for learned_fusion strategy)
+  learned_model_path: "data/models/fusion_model.pkl"
+
+# --- Evaluation ---
+evaluation:
+  # Bootstrap confidence interval samples (set to 0 to skip)
+  bootstrap_samples: 1000
+  # IELTS score range
+  min_score: 0.0
+  max_score: 9.0
+  # Round predictions to nearest 0.5 at evaluation time
+  round_to_half: true
+  # Output directory for results
+  output_dir: "results"
+  # Save predictions CSV
+  save_predictions: true
+  # Save metrics JSON
+  save_metrics: true
+  # Generate plots
+  save_plots: true
+
+# --- Experiment ---
+experiment:
+  # Default sample size for eval (-1 = use all test data)
+  sample_size: -1
+  # Number of repeated runs
+  num_runs: 1
+  # Run name suffix
+  name: "benchmark_default"

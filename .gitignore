@@ -3,20 +3,45 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
+.mypy_cache/
 
 # Virtual env
 venv/
 .env
 .venv/
 .venv311/
+.tmp_autogptq_test/
 
 # Data
 data/raw/
 data/processed/
 data/embeddings/
+data/huggingface_chillies/
+data/models/
+!data/models/
+!data/models/.gitkeep
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.pkl
+*.npz
 
 # Kaggle API key
 .kaggle/
+
+# Generated outputs
+results/**/cache/
+results/full_run_*/
+results/full_proposed*/
+results/fixed_gguf/
+results/full_gguf/
+results/fusion*/
+results/test_*/
+results/tfcs/
+dist/
 
 # OS / editor
 .DS_Store

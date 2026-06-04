@@ -1,0 +1,64 @@
+# Model configurations for baselines and system components
+# Each entry specifies model type, name/path, and any hyperparameters.
+
+# === Embedding Models ===
+embedding:
+  # Primary retrieval model (lightweight, fast)
+  primary:
+    name: "sentence-transformers/all-MiniLM-L6-v2"
+    dim: 384
+    max_seq_length: 256
+    local_files_only: false
+    device: "auto"
+
+  # High-quality alternative (slower, better accuracy)
+  secondary:
+    name: "sentence-transformers/all-mpnet-base-v2"
+    dim: 768
+    max_seq_length: 384
+    local_files_only: false
+    device: "auto"
+
+# === TF-IDF Baselines ===
+tfidf:
+  ridge:
+    alpha: 1.0
+    max_features: 5000
+    ngram_range: [1, 2]
+  svr:
+    kernel: "rbf"
+    C: 1.0
+    gamma: "scale"
+    max_features: 5000
+    ngram_range: [1, 2]
+
+# === Embedding-based Baselines ===
+embedding_baseline:
+  knn:
+    n_neighbors: 5
+    weights: "distance"
+    metric: "cosine"
+  lightgbm:
+    n_estimators: 200
+    max_depth: 5
+    learning_rate: 0.1
+    num_leaves: 31
+
+# === DistilBERT Regressor ===
+distilbert:
+  model_name: "distilbert-base-uncased"
+  device: "auto"
+  max_length: 256
+  batch_size: 16
+  learning_rate: 0.00002
+  num_epochs: 3
+  hidden_dim: 128
+  dropout: 0.1
+
+# === Fusion Meta-Model ===
+fusion_meta:
+  model_type: "ridge"  # ridge, random_forest, linear
+  ridge_alpha: 1.0
+  random_forest:
+    n_estimators: 100
+    max_depth: 3

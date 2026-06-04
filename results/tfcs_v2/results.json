@@ -1,0 +1,64 @@
+{
+  "method": "TFCS v2 (TFCS Cascade)",
+  "dataset": {
+    "source": "chillies/IELTS-writing-task-2-evaluation",
+    "raw_essays": 10324,
+    "clean_essays": 8722,
+    "train": 6782,
+    "validation": 1454,
+    "test": 486
+  },
+  "configs": {
+    "max_accuracy": {
+      "var": 0.75,
+      "delta": 0.5,
+      "mae_stage1": 0.9599,
+      "qwk_stage1": 0.3577,
+      "mae_stage2": 0.9105,
+      "qwk_stage2": 0.4670,
+      "mae_cascade": 0.8909,
+      "qwk_cascade": 0.4654,
+      "n_stage1": 12,
+      "n_stage2": 233,
+      "n_stage3": 241,
+      "pct_stage1": 2.5,
+      "pct_stage2": 47.9,
+      "pct_stage3": 49.6,
+      "llm_failures": 0
+    },
+    "lightweight": {
+      "var": 1.0,
+      "delta": 1.5,
+      "mae_stage1": 0.9599,
+      "qwk_stage1": 0.3577,
+      "mae_stage2": 0.9105,
+      "qwk_stage2": 0.4670,
+      "mae_cascade": 0.9033,
+      "qwk_cascade": 0.4659,
+      "n_stage1": 53,
+      "n_stage2": 407,
+      "n_stage3": 26,
+      "pct_stage1": 10.9,
+      "pct_stage2": 83.7,
+      "pct_stage3": 5.3,
+      "llm_failures": 0
+    },
+    "ultra_light": {
+      "var": 2.0,
+      "delta": 1.5,
+      "mae_stage1": 0.9599,
+      "qwk_stage1": 0.3577,
+      "mae_stage2": 0.9105,
+      "qwk_stage2": 0.4670,
+      "mae_cascade": 0.9506,
+      "qwk_cascade": 0.3752,
+      "n_stage1": 429,
+      "n_stage2": 54,
+      "n_stage3": 3,
+      "pct_stage1": 88.3,
+      "pct_stage2": 11.1,
+      "pct_stage3": 0.6,
+      "llm_failures": 0
+    }
+  }
+}

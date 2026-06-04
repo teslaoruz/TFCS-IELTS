@@ -1,130 +1,158 @@
-# IELTS RAG Project
+# TFCS-IELTS
 
-This project is an IELTS writing evaluation system built with a Retrieval-Augmented Generation (RAG) architecture.
+Three-Tier Cascaded Scoring System for Offline IELTS Writing Assessment.
 
-Current implementation status:
-- Dataset collection and preprocessing: complete
-- Embedding model and FAISS index: complete
-- Retrieval-based scoring and feedback module (lightweight LLM placeholder): complete
-- Streamlit frontend demo: complete
-- Local quantized LLM inference: optional/future
+TFCS-IELTS reproduces the final paper pipeline: a tunable cascade that scores most IELTS Writing Task 2 essays with lightweight models and escalates only uncertain cases to a local retrieval-augmented LLM.
 
-## System Pipeline
+## Paper Abstract
 
-```text
-User Essay
-   -> Embedding Model
-   -> FAISS Retrieval (Top-k Similar Essays)
-   -> Similarity-based Band Prediction
-   -> Feedback Generator (Lightweight Placeholder)
-   -> Frontend UI
-```
+Automated IELTS Writing assessment requires reliable scoring under privacy and resource constraints. TFCS-IELTS uses TF-IDF Ridge regression with k-nearest-neighbor variance estimation, a fine-tuned DistilBERT regressor, and a local Qwen2.5-3B GGUF model conditioned on retrieved IELTS reference essays. On the Hugging Face `chillies/IELTS-writing-task-2-evaluation` corpus, 10,324 raw essays are cleaned to 8,722 valid samples and split into 6,782 train, 1,454 validation, and 486 test essays. The lightweight cascade reaches MAE 0.9033 and QWK 0.4659 while invoking the LLM for 5.3% of test essays with 0% parsing failures.
 
-## Project Structure
+## Method Summary
+
+Stage 1 fits TF-IDF unigram/bigram features with `max_features=5000` and Ridge `alpha=1.0`. Confidence is estimated with weighted k-nearest-neighbor score variance using `k=20`.
+
+Stage 2 fine-tunes `distilbert-base-uncased` for overall IELTS band regression with `max_length=256`, batch size `16`, learning rate `2e-5`, `3` epochs, and seed `42`.
+
+Stage 3 builds a FAISS `FlatIP` index over MiniLM-L6-v2 essay embeddings. It retrieves top 7 neighbors and injects the top 3 as calibration examples into a local Qwen2.5-3B GGUF Q4_K_M prompt. The LLM must return exactly five JSON keys: `task_response`, `coherence`, `lexical`, `grammar`, and `overall`.
+
+## Repository Structure
 
 ```text
-ielts-rag-project/
+TFCS-IELTS/
+├── configs/                 # Model, data, retrieval, LLM, and prompt settings
 ├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── embeddings/
+│   ├── models/              # Place qwen2.5-3b-instruct-q4_k_m.gguf here
+│   └── splits/              # Fixed train/val/test CSV splits used by the paper
+├── paper/                   # Final submitted paper markdown
+├── results/tfcs_v2/figures/ # Paper figure outputs
+├── scripts/                 # Reproduction helpers
 ├── src/
-│   ├── preprocessing/
-│   └── rag/
-│       ├── build_index.py
-│       ├── query_index.py
-│       ├── lightweight_inference.py
-│       └── demo_lightweight.py
-├── streamlit_app.py
-├── requirements.txt
-└── README.md
+│   ├── baselines/           # TF-IDF Ridge and DistilBERT regressors
+│   ├── data/                # Hugging Face dataset loading
+│   ├── experiments/         # Split builder and benchmark support
+│   ├── rag/                 # Retriever, LLM scorer, config utilities
+│   └── utils/               # Metrics and rounding helpers
+├── tfcs_v2_full.py          # Main paper reproduction entry point
+├── reproduce.sh             # Linux/macOS reproduction script
+└── requirements.txt
 ```
 
-## Setup
+## Installation
 
-1. Clone and enter project:
-
-```bash
-git clone https://github.com/teslaoruz/ielts-rag-project.git
-cd ielts-rag-project
-```
-
-2. Create and activate environment:
+Python 3.11 is recommended.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-3. Download Kaggle datasets into `data/raw/`:
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Dataset Preparation
+
+The default source is the public Hugging Face dataset:
+
+```text
+chillies/IELTS-writing-task-2-evaluation
+```
+
+Build the deterministic paper splits:
 
 ```bash
-mkdir -p data/raw
-cd data/raw
-kaggle datasets download -d mazlumi/ielts-writing-scored-essays-dataset
-kaggle datasets download -d xntrng15/ielts-writing-dataset
-unzip -o "*.zip"
-cd ../../
+python -m src.experiments.build_splits
 ```
 
-4. Preprocess data:
+Expected split sizes:
+
+```text
+train: 6782
+val:   1454
+test:   486
+```
+
+If Hugging Face access is unavailable, download the dataset manually and place CSV split files under `data/huggingface_chillies/`; the loader will use them as a fallback.
+
+## Model Preparation
+
+Download the Qwen2.5-3B Instruct GGUF Q4_K_M file separately and place it at:
+
+```text
+data/models/qwen2.5-3b-instruct-q4_k_m.gguf
+```
+
+The model binary is intentionally not committed to GitHub.
+
+## Reproduction
+
+From the repository root:
 
 ```bash
-python src/preprocessing/preprocess_all.py
+bash reproduce.sh
 ```
 
-5. Build embeddings and FAISS index:
+or on Windows:
+
+```powershell
+.\scripts\reproduce.ps1
+```
+
+Manual equivalent:
 
 ```bash
-python src/rag/build_index.py
+python -m src.experiments.build_splits
+rm -rf results/tfcs_v2/cache
+python tfcs_v2_full.py
 ```
 
-## Demo Options
+## Expected Outputs
 
-### 1) Streamlit Frontend (recommended for presentation)
+The main run writes:
 
-```bash
-streamlit run streamlit_app.py
+```text
+results/tfcs_v2/cache/results.json
+results/tfcs_v2/cache/predictions_lightweight.npz
+results/tfcs_v2/figures/fig1_bar_mae.png
+results/tfcs_v2/figures/fig2_scatter.png
+results/tfcs_v2/figures/fig3_error_dist.png
+results/tfcs_v2/figures/fig4_tradeoff.png
+results/tfcs_v2/figures/fig5_confusion.png
+results/tfcs_v2/figures/fig6_cascade_flow.png
 ```
 
-UI includes:
-- Essay input box
-- Top-k similar essay retrieval from FAISS
-- Similarity-weighted predicted IELTS band
-- Band descriptor summary
-- Strength and improvement feedback
+Paper-aligned headline results:
 
-### 2) Terminal Demo
+| Method | Test MAE | Test QWK | LLM calls |
+| --- | ---: | ---: | ---: |
+| TF-IDF Ridge | 0.9599 | 0.3577 | 0% |
+| Fine-tuned DistilBERT | 0.9105 | 0.4670 | 0% |
+| Cascade Max Accuracy | 0.8909 | 0.4654 | 49.6% |
+| Cascade Lightweight | 0.9033 | 0.4659 | 5.3% |
+| Cascade Ultra-light | 0.9506 | 0.3752 | 0.6% |
 
-```bash
-python src/rag/demo_lightweight.py
+## Hardware
+
+Reported experiments used an Intel i5-12500H CPU, 16 GB RAM, and optional RTX 3050 4 GB GDDR6 acceleration. Stage 1 runs on CPU. Stage 2 uses about 1.3 GB GPU memory. Stage 3 uses about 2.3 GB GPU memory for the quantized local LLM.
+
+## Citation
+
+```bibtex
+@article{rana2026tfcsielts,
+  title={TFCS-IELTS: A Three-Tier Cascaded Scoring System for Offline IELTS Writing Assessment},
+  author={Rana, Md Jahidul Islam and Oruzgani, Irshad Ahmad and Kunicina, Nadezhda},
+  year={2026}
+}
 ```
 
-## Lightweight Inference Module
+## License
 
-Because local quantized LLM inference may be blocked by hardware constraints, the project includes a fallback module:
-- Retrieves nearest essays from FAISS
-- Computes similarity-weighted band estimate
-- Generates structured feedback via rule-based templates
-
-This is implemented in:
-- `src/rag/lightweight_inference.py`
-
-Suggested academic framing:
-> Due to hardware constraints, quantized LLM deployment is simulated. The full RAG retrieval and similarity-based evaluation pipeline is fully implemented and validated.
-
-## Outputs
-
-Core generated artifacts:
-- `data/processed/ielts_clean.csv`
-- `data/embeddings/faiss.index`
-- `data/embeddings/metadata.pkl`
-
-## Notes
-
-- Do not commit Kaggle credentials (`~/.kaggle/kaggle.json`) to git.
-- The current system is demo-ready without local LLM quantization.
-- Optional next step: connect an external LLM API for richer natural-language feedback while keeping retrieval local.
-- If you see a metadata pickle compatibility error, run `python src/rag/build_index.py` to regenerate `data/embeddings/metadata.pkl`.
+Code is released under the MIT License. Dataset and model files are governed by their original upstream licenses.
