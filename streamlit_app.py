@@ -10,6 +10,7 @@ from src.inference.ui_pipeline import (
     CASCADE_PRESETS,
     build_retriever,
     build_stage1,
+    build_stage2,
     load_llm_scorer,
     load_splits,
     score_essay,
@@ -32,6 +33,11 @@ def cached_splits() -> dict[str, pd.DataFrame]:
 @st.cache_resource(show_spinner="Preparing TF-IDF Ridge stage...")
 def cached_stage1(train_df: pd.DataFrame):
     return build_stage1(train_df)
+
+
+@st.cache_resource(show_spinner="Loading DistilBERT Stage 2 (first run trains from scratch)...")
+def cached_stage2(train_df: pd.DataFrame, device: str):
+    return build_stage2(train_df, device=device)
 
 
 @st.cache_resource(show_spinner="Building FAISS retriever...")
@@ -107,6 +113,10 @@ if score_clicked:
 
     stage1 = cached_stage1(df_train)
 
+    stage2 = None
+    if mode != "Stage 1 only" and use_stage2:
+        stage2 = cached_stage2(df_train, device=device)
+
     retriever = None
     llm_scorer = None
     if mode != "Stage 1 only" and use_stage3:
@@ -121,8 +131,7 @@ if score_clicked:
         prompt=prompt,
         mode=mode,
         stage1=stage1,
-        df_train=df_train if use_stage2 else None,
-        device=device,
+        stage2=stage2,
         retriever=retriever,
         llm_scorer=llm_scorer,
     )

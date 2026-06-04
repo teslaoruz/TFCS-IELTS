@@ -152,10 +152,7 @@ def predict_stage2(text: str, bundle: Stage2Bundle) -> float:
 def _get_cached_stage2(df_train: pd.DataFrame, device: str) -> Stage2Bundle | None:
     key = str(resolve_torch_device(device))
     if key not in _lazy_stage2:
-        try:
-            _lazy_stage2[key] = build_stage2(df_train, device)
-        except Exception:
-            return None
+        _lazy_stage2[key] = build_stage2(df_train, device)
     return _lazy_stage2[key]
 
 
