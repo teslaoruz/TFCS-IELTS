@@ -18,8 +18,7 @@ data/raw/
 data/processed/
 data/embeddings/
 data/huggingface_chillies/
-data/models/
-!data/models/
+data/models/*
 !data/models/.gitkeep
 *.gguf
 *.safetensors

@@ -31,8 +31,10 @@ TFCS-IELTS/
 │   ├── baselines/           # TF-IDF Ridge and DistilBERT regressors
 │   ├── data/                # Hugging Face dataset loading
 │   ├── experiments/         # Split builder and benchmark support
+│   ├── inference/           # Interactive UI scoring helpers
 │   ├── rag/                 # Retriever, LLM scorer, config utilities
 │   └── utils/               # Metrics and rounding helpers
+├── streamlit_app.py         # Local scoring UI
 ├── tfcs_v2_full.py          # Main paper reproduction entry point
 ├── reproduce.sh             # Linux/macOS reproduction script
 └── requirements.txt
@@ -91,6 +93,37 @@ data/models/qwen2.5-3b-instruct-q4_k_m.gguf
 ```
 
 The model binary is intentionally not committed to GitHub.
+
+## Local UI
+
+Run the Streamlit interface from the repository root:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Windows PowerShell:
+
+```powershell
+.\scripts\run_ui.ps1
+```
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+The UI supports four modes:
+
+| Mode | Behavior |
+| --- | --- |
+| Stage 1 only | Fast TF-IDF Ridge score and uncertainty estimate |
+| Lightweight | Paper default cascade, `var=1.0`, `delta=1.5` |
+| Max accuracy | More Stage 3 use, `var=0.75`, `delta=0.5` |
+| Ultra-light | Minimal Stage 3 use, `var=2.0`, `delta=1.5` |
+
+Stage 1 runs immediately after the first cached setup. DistilBERT and Qwen are optional toggles in the sidebar because their first run is slower and requires model availability. If the Qwen GGUF file is missing, the UI keeps working and falls back before Stage 3.
 
 ## Reproduction
 
