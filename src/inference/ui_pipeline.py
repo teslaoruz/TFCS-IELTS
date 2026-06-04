@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,12 @@ CASCADE_PRESETS = {
     "Ultra-light": {"var": 2.0, "delta": 1.5},
 }
 
+CACHE_DIR = Path("results/tfcs_v2/cache")
+STAGE2_CACHE_PATH = CACHE_DIR / "stage2_model.pkl"
+
+_lazy_stage2: dict[str, Stage2Bundle] = {}
+_stage2_pred_cache: dict[str, float] = {}
+
 
 def load_splits(split_dir: str | Path | None = None) -> dict[str, pd.DataFrame]:
     config = load_benchmark_config()
@@ -81,12 +88,28 @@ def build_stage1(df_train: pd.DataFrame) -> Stage1Bundle:
 
 def build_stage2(df_train: pd.DataFrame, device: str = "auto") -> Stage2Bundle:
     resolved_device = resolve_torch_device(device)
+
+    if STAGE2_CACHE_PATH.exists():
+        with open(STAGE2_CACHE_PATH, "rb") as f:
+            data = pickle.load(f)
+        model = data["model"]
+        tokenizer = data["tokenizer"]
+        model.to(resolved_device)
+        return Stage2Bundle(model=model, tokenizer=tokenizer, device=resolved_device)
+
     model, tokenizer = train_distilbert(
         df_train,
         band_column="overall",
         text_column="essay",
         device=resolved_device,
     )
+
+    STAGE2_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    model.cpu()
+    with open(STAGE2_CACHE_PATH, "wb") as f:
+        pickle.dump({"model": model, "tokenizer": tokenizer}, f)
+    model.to(resolved_device)
+
     return Stage2Bundle(model=model, tokenizer=tokenizer, device=resolved_device)
 
 
@@ -110,6 +133,9 @@ def predict_stage1(text: str, bundle: Stage1Bundle) -> float:
 
 
 def predict_stage2(text: str, bundle: Stage2Bundle) -> float:
+    key = f"{text}|{bundle.device}"
+    if key in _stage2_pred_cache:
+        return _stage2_pred_cache[key]
     df = pd.DataFrame({"essay": [text]})
     pred = predict_distilbert(
         bundle.model,
@@ -118,7 +144,19 @@ def predict_stage2(text: str, bundle: Stage2Bundle) -> float:
         text_column="essay",
         device=bundle.device,
     )
-    return float(pred[0])
+    result = float(pred[0])
+    _stage2_pred_cache[key] = result
+    return result
+
+
+def _get_cached_stage2(df_train: pd.DataFrame, device: str) -> Stage2Bundle | None:
+    key = str(resolve_torch_device(device))
+    if key not in _lazy_stage2:
+        try:
+            _lazy_stage2[key] = build_stage2(df_train, device)
+        except Exception:
+            return None
+    return _lazy_stage2[key]
 
 
 def paper_fusion(stage2_score: float, llm_score: float | None) -> float:
@@ -163,6 +201,8 @@ def score_essay(
     stage2: Stage2Bundle | None = None,
     retriever: Any | None = None,
     llm_scorer: LLMScorer | None = None,
+    df_train: pd.DataFrame | None = None,
+    device: str = "auto",
 ) -> ScoreResult:
     text = essay.strip()
     s1 = predict_stage1(text, stage1)
@@ -191,14 +231,17 @@ def score_essay(
         )
 
     if stage2 is None:
-        return ScoreResult(
-            final_score=s1,
-            route="Stage 2 unavailable; returned Stage 1 fallback",
-            stage1_score=s1,
-            stage1_variance=variance,
-            threshold_var=var_threshold,
-            threshold_delta=delta_threshold,
-        )
+        if df_train is not None:
+            stage2 = _get_cached_stage2(df_train, device)
+        if stage2 is None:
+            return ScoreResult(
+                final_score=s1,
+                route="Stage 2 unavailable; returned Stage 1 fallback",
+                stage1_score=s1,
+                stage1_variance=variance,
+                threshold_var=var_threshold,
+                threshold_delta=delta_threshold,
+            )
 
     s2 = predict_stage2(text, stage2)
     if abs(s2 - s1) <= delta_threshold:
